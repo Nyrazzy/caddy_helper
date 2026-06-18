@@ -479,7 +479,7 @@ proxy_is_success() {
   local d="$1" u="$2"
   has caddy || return 1
   [ -f "$CADDYFILE" ] || return 1
-  caddy validate --config "$CADDYFILE" >/dev/null 2>&1 || return 1
+  caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1 || return 1
   if has systemctl; then
     systemctl is-active --quiet caddy || return 1
   fi
@@ -516,7 +516,7 @@ render_caddyfile() {
   {
     printf '# This Caddyfile is managed by fd Caddy reverse proxy helper.\n'
     printf '# Edit with: nano /etc/caddy/Caddyfile\n'
-    printf '# After manual changes, run: caddy validate --config /etc/caddy/Caddyfile && systemctl reload caddy\n\n'
+    printf '# After manual changes, run: caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && systemctl reload caddy\n\n'
     if [ -n "$global_email" ]; then
       printf '{\n\temail %s\n}\n\n' "$global_email"
     fi
@@ -551,7 +551,7 @@ render_caddyfile() {
 
   if has caddy; then
     caddy fmt --overwrite "$tmp" || true
-    if ! caddy validate --config "$tmp"; then
+    if ! caddy validate --config "$tmp" --adapter caddyfile; then
       rm -f "$tmp"
       warn "Caddy 配置校验失败，正式配置未修改。"
       return 1
@@ -614,7 +614,7 @@ show_caddyfile() {
   if ! print_proxy_list; then
     printf '\n配置文件位置：%s\n' "$CADDYFILE" >/dev/tty
     printf '如果需要手动编辑：nano %s\n' "$CADDYFILE" >/dev/tty
-    printf '修改完成后重载：caddy validate --config %s && systemctl reload caddy\n' "$CADDYFILE" >/dev/tty
+    printf '修改完成后重载：caddy validate --config %s --adapter caddyfile && systemctl reload caddy\n' "$CADDYFILE" >/dev/tty
     return
   fi
 
@@ -671,7 +671,7 @@ show_caddyfile() {
 
   printf '\n如果要修改，推荐直接回菜单选 2 重新添加同一个域名，脚本会覆盖旧配置。\n' >/dev/tty
   printf '也可以手动编辑：nano %s\n' "$CADDYFILE" >/dev/tty
-  printf '修改完成后记得重载：caddy validate --config %s && systemctl reload caddy\n' "$CADDYFILE" >/dev/tty
+  printf '修改完成后记得重载：caddy validate --config %s --adapter caddyfile && systemctl reload caddy\n' "$CADDYFILE" >/dev/tty
 }
 
 show_status() {
@@ -707,11 +707,11 @@ show_status() {
   fi
 
   if [ -f "$CADDYFILE" ]; then
-    if caddy validate --config "$CADDYFILE" >/tmp/fd-caddy-validate.log 2>&1; then
+    if caddy validate --config "$CADDYFILE" --adapter caddyfile >/tmp/fd-caddy-validate.log 2>&1; then
       printf '  - 配置：语法正确。\n' >/dev/tty
     else
       printf '  - 配置：有错误，请执行下面命令查看原因：\n' >/dev/tty
-      printf '    caddy validate --config %s\n' "$CADDYFILE" >/dev/tty
+      printf '    caddy validate --config %s --adapter caddyfile\n' "$CADDYFILE" >/dev/tty
     fi
   else
     printf '  - 配置：还没有找到 %s。\n' "$CADDYFILE" >/dev/tty
@@ -749,7 +749,7 @@ reload_caddy() {
     warn "Caddy 未安装，无法重载。"
     return
   fi
-  if ! caddy validate --config "$CADDYFILE"; then
+  if ! caddy validate --config "$CADDYFILE" --adapter caddyfile; then
     warn "配置校验失败，已取消重载。可以执行：nano $CADDYFILE"
     return
   fi
@@ -798,7 +798,7 @@ menu_restore_backup() {
   cp -a "${backups[$((choice - 1))]}" "$CADDYFILE"
   rm -f "$FD_DB"
   ensure_proxy_db
-  if caddy validate --config "$CADDYFILE"; then
+  if caddy validate --config "$CADDYFILE" --adapter caddyfile; then
     reload_caddy
     log "备份已恢复。"
   else
