@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# One-file Caddy installer for GitHub Gist.
+# One-file Caddy installer and reverse proxy helper.
 # Supports common Linux distributions and optional one-command reverse proxy setup.
 
+DEFAULT_SELF_URL="https://raw.githubusercontent.com/Nyrazzy/caddy_helper/refs/heads/main/install-caddy.sh"
 DOMAIN=""
 UPSTREAM=""
 EMAIL=""
@@ -15,7 +16,9 @@ SELF_URL=""
 
 log() { printf '\033[1;32m[OK]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[WARN]\033[0m %s\n' "$*" >&2; }
-die() { printf '\033[1;31m[ERR]\033[0m %s\n' "$*" >&2; exit 1; }
+err() { printf '\033[1;31m[ERR]\033[0m %s\n' "$*" >&2; }
+danger() { printf '\033[1;31m%s\033[0m\n' "$*" >/dev/tty; }
+die() { err "$*"; exit 1; }
 has() { command -v "$1" >/dev/null 2>&1; }
 
 usage() {
@@ -83,6 +86,7 @@ install_shortcut() {
   local target source_path
   target="/usr/local/bin/fd"
   mkdir -p /usr/local/bin
+  [ -n "$SELF_URL" ] || SELF_URL="$DEFAULT_SELF_URL"
 
   if [ -n "$SELF_URL" ]; then
     cat >"$target" <<EOF
@@ -102,7 +106,7 @@ fi
 EOF
   else
     source_path="${BASH_SOURCE[0]:-}"
-    [ -n "$source_path" ] && [ -r "$source_path" ] || die "无法复制脚本本体。请用：bash <(curl -fsSL RAW_GIST_URL) --install-shortcut --self-url RAW_GIST_URL"
+    [ -n "$source_path" ] && [ -r "$source_path" ] || die "无法复制脚本本体。请用：bash <(curl -fsSL ${DEFAULT_SELF_URL}) --install-shortcut --self-url ${DEFAULT_SELF_URL}"
     cp "$source_path" "$target"
   fi
 
@@ -110,7 +114,7 @@ EOF
   log "快捷命令已安装：fd"
 }
 
-[ "$(id -u)" -eq 0 ] || die "Please run as root, for example: bash <(curl -fsSL RAW_GIST_URL) --install-shortcut"
+[ "$(id -u)" -eq 0 ] || die "请使用 root 用户运行，例如：bash <(curl -fsSL ${DEFAULT_SELF_URL}) --install-shortcut"
 
 if [ "$INSTALL_SHORTCUT" -eq 0 ] && [ "$INSTALL_ONLY" -eq 0 ] && [ -n "$DOMAIN$UPSTREAM" ]; then
   [ -n "$DOMAIN" ] || die "--domain is required unless --install-only is used"
@@ -292,6 +296,59 @@ normalize_url_host() {
   printf '%s\n' "$1" | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#/.*$##; s#:.*$##'
 }
 
+is_ipv4() {
+  local value="$1" part
+  [[ "$value" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+  IFS=. read -r -a part <<<"$value"
+  [ "${#part[@]}" -eq 4 ] || return 1
+  local n
+  for n in "${part[@]}"; do
+    [ "$n" -ge 0 ] 2>/dev/null && [ "$n" -le 255 ] 2>/dev/null || return 1
+  done
+}
+
+is_valid_hostname() {
+  local value="$1" label
+  [ "$value" = "localhost" ] && return 0
+  is_ipv4 "$value" && return 0
+  [[ "$value" == *.* ]] || return 1
+  [[ "$value" =~ ^[A-Za-z0-9.-]+$ ]] || return 1
+  [[ "$value" != .* && "$value" != *. ]] || return 1
+  [[ "$value" != *..* ]] || return 1
+  local -a labels
+  IFS=. read -r -a labels <<<"$value"
+  for label in "${labels[@]}"; do
+    [ -n "$label" ] || return 1
+    [ "${#label}" -le 63 ] || return 1
+    [[ "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]] || return 1
+  done
+}
+
+is_valid_domain() {
+  local value="$1"
+  [[ "$value" != http://* && "$value" != https://* ]] || return 1
+  [[ "$value" != *"/"* && "$value" != *":"* ]] || return 1
+  is_valid_hostname "$value"
+}
+
+is_valid_upstream() {
+  local value="$1" host port
+  [[ "$value" == http://* || "$value" == https://* ]] || return 1
+  host="$(normalize_url_host "$value")"
+  [ -n "$host" ] || return 1
+  port="$(printf '%s\n' "$value" | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#/.*$##' | awk -F: 'NF > 1 { print $NF }')"
+  if [ -n "$port" ] && [[ "$port" =~ ^[0-9]+$ ]]; then
+    [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || return 1
+  fi
+  is_valid_hostname "$host"
+}
+
+is_valid_email() {
+  local value="$1"
+  [ -z "$value" ] && return 0
+  [[ "$value" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]
+}
+
 backup_caddyfile() {
   mkdir -p /etc/caddy
   if [ -f "$CADDYFILE" ]; then
@@ -443,8 +500,13 @@ render_caddyfile() {
     done <"$FD_DB"
   } >"$CADDYFILE"
 
-  caddy fmt --overwrite "$CADDYFILE" || true
-  caddy validate --config "$CADDYFILE"
+  if has caddy; then
+    caddy fmt --overwrite "$CADDYFILE" || true
+    if ! caddy validate --config "$CADDYFILE"; then
+      warn "Caddy 配置校验失败，请查看：$CADDYFILE"
+      return 1
+    fi
+  fi
 }
 
 write_caddyfile() {
@@ -475,7 +537,10 @@ restart_caddy() {
 
 configure_proxy() {
   install_caddy
-  write_caddyfile
+  if ! write_caddyfile; then
+    warn "配置没有写入成功，已返回主菜单。"
+    return
+  fi
   open_firewall_ports
   restart_caddy
   log "反代已配置：${DOMAIN} -> ${UPSTREAM}"
@@ -601,7 +666,7 @@ show_status() {
 
   if has journalctl && has systemctl && systemctl is-active --quiet caddy; then
     if journalctl -u caddy -p warning -n 5 --no-pager >/tmp/fd-caddy-warnings.log 2>&1 && [ -s /tmp/fd-caddy-warnings.log ]; then
-      printf '  - 最近日志：有警告或错误。可在菜单选 6 查看最近日志。\n' >/dev/tty
+      printf '  - 最近日志：有警告或错误。可在菜单选 7 查看最近日志。\n' >/dev/tty
     else
       printf '  - 最近日志：没有看到明显警告。\n' >/dev/tty
     fi
@@ -617,7 +682,14 @@ show_logs() {
 }
 
 reload_caddy() {
-  caddy validate --config "$CADDYFILE"
+  if ! has caddy; then
+    warn "Caddy 未安装，无法重载。"
+    return
+  fi
+  if ! caddy validate --config "$CADDYFILE"; then
+    warn "配置校验失败，已取消重载。可以执行：nano $CADDYFILE"
+    return
+  fi
   if has systemctl; then
     systemctl reload caddy || systemctl restart caddy
   else
@@ -626,16 +698,163 @@ reload_caddy() {
   log "Caddy 已重载"
 }
 
+menu_restore_backup() {
+  local backups=()
+  while IFS= read -r file; do
+    backups+=("$file")
+  done < <(ls -1t "${CADDYFILE}".bak.* 2>/dev/null || true)
+
+  if [ "${#backups[@]}" -eq 0 ]; then
+    warn "没有找到 Caddyfile 备份。"
+    return
+  fi
+
+  printf '\n可恢复的备份：\n' >/dev/tty
+  local i
+  for i in "${!backups[@]}"; do
+    printf '  %s. %s\n' "$((i + 1))" "${backups[$i]}" >/dev/tty
+  done
+  printf '  0. 返回\n' >/dev/tty
+
+  local choice ok
+  choice="$(prompt '请选择要恢复的备份' '0')"
+  [ "$choice" = "0" ] && return
+  if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#backups[@]}" ]; then
+    warn "编号无效，已返回主菜单。"
+    return
+  fi
+
+  printf '\n即将恢复：%s\n' "${backups[$((choice - 1))]}" >/dev/tty
+  ok="$(prompt '确认恢复？输入 y 继续' 'n')"
+  if [ "$ok" != "y" ] && [ "$ok" != "Y" ]; then
+    warn "已取消，返回主菜单。"
+    return
+  fi
+
+  backup_caddyfile
+  cp -a "${backups[$((choice - 1))]}" "$CADDYFILE"
+  rm -f "$FD_DB"
+  ensure_proxy_db
+  if caddy validate --config "$CADDYFILE"; then
+    reload_caddy
+    log "备份已恢复。"
+  else
+    warn "备份已复制，但配置校验失败。请查看配置后手动处理：nano $CADDYFILE"
+  fi
+}
+
+update_script() {
+  local url tmp
+  url="${SELF_URL:-$DEFAULT_SELF_URL}"
+  tmp="$(mktemp)"
+
+  if has curl; then
+    curl -q -fsSL "${url}?$(date +%s)" -o "$tmp" || { rm -f "$tmp"; warn "下载脚本失败。"; return; }
+  elif has wget; then
+    wget -qO "$tmp" "${url}?$(date +%s)" || { rm -f "$tmp"; warn "下载脚本失败。"; return; }
+  else
+    warn "需要先安装 curl 或 wget。"
+    return
+  fi
+
+  if ! bash -n "$tmp"; then
+    rm -f "$tmp"
+    warn "下载到的脚本语法检查失败，已取消更新。"
+    return
+  fi
+
+  install -m 0755 "$tmp" /usr/local/bin/fd
+  rm -f "$tmp"
+  log "脚本已更新到 /usr/local/bin/fd。重新运行 fd 即可使用新版。"
+}
+
+uninstall_script() {
+  danger "危险操作：卸载 fd 脚本助手。"
+  printf '这只会删除 /usr/local/bin/fd，不会卸载 Caddy，也不会删除 Caddy 配置。\n' >/dev/tty
+  local ok
+  ok="$(prompt '确认卸载脚本？输入 DELETE 继续' 'n')"
+  if [ "$ok" != "DELETE" ]; then
+    warn "已取消，返回主菜单。"
+    return
+  fi
+  rm -f /usr/local/bin/fd
+  log "fd 脚本助手已卸载。"
+}
+
+remove_caddy_package() {
+  if has apt-get; then
+    apt-get purge -y caddy || true
+    apt-get autoremove -y || true
+    rm -f /etc/apt/sources.list.d/caddy-stable.list
+    rm -f /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    apt-get update || true
+  elif has dnf; then
+    dnf remove -y caddy || true
+    dnf -y copr disable @caddy/caddy || true
+  elif has yum; then
+    yum remove -y caddy || true
+    yum -y copr disable @caddy/caddy || true
+  elif has pacman; then
+    pacman -Rns --noconfirm caddy || true
+  elif has apk; then
+    apk del caddy || true
+  elif has zypper; then
+    zypper --non-interactive remove caddy || true
+  fi
+}
+
+uninstall_caddy_clean() {
+  danger "危险操作：彻底卸载 Caddy。"
+  danger "这会删除 Caddy 程序、服务、配置、证书数据、日志、脚本记录和 caddy 用户。"
+  printf '将删除的常见路径：/etc/caddy /var/lib/caddy /var/log/caddy /usr/bin/caddy /etc/systemd/system/caddy.service\n' >/dev/tty
+  local ok
+  ok="$(prompt '确认彻底卸载 Caddy？输入 DELETE 继续' 'n')"
+  if [ "$ok" != "DELETE" ]; then
+    warn "已取消，返回主菜单。"
+    return
+  fi
+
+  if has systemctl; then
+    systemctl stop caddy >/dev/null 2>&1 || true
+    systemctl disable caddy >/dev/null 2>&1 || true
+  elif has service; then
+    service caddy stop >/dev/null 2>&1 || true
+  fi
+
+  remove_caddy_package
+  rm -f /usr/bin/caddy /usr/local/bin/caddy /etc/systemd/system/caddy.service
+  rm -rf /etc/caddy /var/lib/caddy /var/log/caddy
+  if has systemctl; then
+    systemctl daemon-reload || true
+    systemctl reset-failed caddy >/dev/null 2>&1 || true
+  fi
+  if id -u caddy >/dev/null 2>&1; then
+    userdel -r caddy >/dev/null 2>&1 || userdel caddy >/dev/null 2>&1 || true
+  fi
+  if getent group caddy >/dev/null 2>&1; then
+    groupdel caddy >/dev/null 2>&1 || true
+  fi
+
+  log "Caddy 已尽量彻底卸载。"
+}
+
 menu_add_proxy() {
   DOMAIN="$(prompt '请输入你要对外访问的域名，例如 proxy.example.com')"
-  [ -n "$DOMAIN" ] || die "域名不能为空"
+  if ! is_valid_domain "$DOMAIN"; then
+    warn "访问域名不合法。示例：proxy.example.com。已返回主菜单。"
+    return
+  fi
 
   UPSTREAM="$(prompt '请输入你想反代的目标，例如 https://www.example.com 或 http://127.0.0.1:3000')"
-  [ -n "$UPSTREAM" ] || die "反代目标不能为空"
+  [ -n "$UPSTREAM" ] || { warn "反代目标不能为空，已返回主菜单。"; return; }
   case "$UPSTREAM" in
     http://*|https://*) ;;
     *) UPSTREAM="https://${UPSTREAM}" ;;
   esac
+  if ! is_valid_upstream "$UPSTREAM"; then
+    warn "反代目标不合法。示例：https://www.example.com 或 http://127.0.0.1:3000。已返回主菜单。"
+    return
+  fi
 
   local use_https email_answer
   use_https="$(prompt '是否自动申请 HTTPS 证书？输入 y 或 n' 'y')"
@@ -644,6 +863,10 @@ menu_add_proxy() {
   else
     HTTP_ONLY=0
     email_answer="$(prompt '请输入证书邮箱，可直接回车跳过')"
+    if ! is_valid_email "$email_answer"; then
+      warn "邮箱格式不合法，已返回主菜单。"
+      return
+    fi
     EMAIL="$email_answer"
   fi
 
@@ -655,7 +878,10 @@ menu_add_proxy() {
   fi
   local ok
   ok="$(prompt '确认执行？输入 y 继续' 'y')"
-  [ "$ok" = "y" ] || [ "$ok" = "Y" ] || die "已取消"
+  if [ "$ok" != "y" ] && [ "$ok" != "Y" ]; then
+    warn "已取消，返回主菜单。"
+    return
+  fi
 
   configure_proxy
 }
@@ -682,10 +908,16 @@ menu_delete_proxy() {
   printf '\n即将删除：%s -> %s\n' "$d" "$u" >/dev/tty
   printf '会从脚本记录和 %s 中一起清理，并自动重载 Caddy。\n' "$CADDYFILE" >/dev/tty
   ok="$(prompt '确认删除？输入 y 继续' 'n')"
-  [ "$ok" = "y" ] || [ "$ok" = "Y" ] || die "已取消"
+  if [ "$ok" != "y" ] && [ "$ok" != "Y" ]; then
+    warn "已取消，返回主菜单。"
+    return
+  fi
 
   delete_proxy_db_index "$choice"
-  render_caddyfile
+  if ! render_caddyfile; then
+    warn "删除后重新生成配置失败，请检查 $CADDYFILE。"
+    return
+  fi
   reload_caddy
   log "已删除反代：${d}"
 }
@@ -705,6 +937,13 @@ main_menu() {
   6. 重载 Caddy 配置
   7. 查看最近日志
   8. 安装/修复 fd 快捷命令
+  9. 恢复 Caddyfile 备份
+
+  91. 更新 fd 脚本
+EOF
+    danger "  98. 卸载 Caddy（彻底删除配置和证书）"
+    danger "  99. 卸载 fd 脚本助手"
+    cat >/dev/tty <<'EOF'
   0. 退出
 ========================================
 EOF
@@ -746,11 +985,27 @@ EOF
         install_shortcut
         pause
         ;;
+      9)
+        menu_restore_backup
+        pause
+        ;;
+      91)
+        update_script
+        pause
+        ;;
+      98)
+        uninstall_caddy_clean
+        pause
+        ;;
+      99)
+        uninstall_script
+        pause
+        ;;
       0)
         exit 0
         ;;
       *)
-        warn "请输入 0-8 之间的编号"
+        warn "请输入菜单里显示的编号"
         pause
         ;;
     esac
@@ -778,6 +1033,13 @@ fi
 if [ -n "$DOMAIN$UPSTREAM" ]; then
   [ -n "$DOMAIN" ] || die "--domain is required"
   [ -n "$UPSTREAM" ] || die "--upstream is required"
+  is_valid_domain "$DOMAIN" || die "访问域名不合法，示例：proxy.example.com"
+  case "$UPSTREAM" in
+    http://*|https://*) ;;
+    *) UPSTREAM="https://${UPSTREAM}" ;;
+  esac
+  is_valid_upstream "$UPSTREAM" || die "反代目标不合法，示例：https://www.example.com 或 http://127.0.0.1:3000"
+  is_valid_email "$EMAIL" || die "邮箱格式不合法"
   configure_proxy
   log "Version: $(caddy version 2>/dev/null || true)"
   exit 0
