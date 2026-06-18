@@ -12,17 +12,10 @@ fd
 
 > 本教程默认你已经是 `root` 用户。如果你不是 root，请在命令前加 `sudo`，或者先执行 `sudo -i` 切换到 root。
 
-## 一、脚本地址
-
-你的 Gist Raw 地址是：
-
-```bash
-https://gist.githubusercontent.com/Nyrazzy/019e6d147b7e69fa82fe08f783a52af7/raw/install-caddy.sh
-```
 
 后面的命令可以直接复制使用。
 
-## 二、第一次安装
+## 一、第一次安装
 
 在 root 用户下执行：
 
@@ -44,7 +37,7 @@ bash <(curl -q -fsSL "https://gist.githubusercontent.com/Nyrazzy/019e6d147b7e69f
 fd
 ```
 
-## 三、菜单功能
+## 二、菜单功能
 
 运行：
 
@@ -77,7 +70,7 @@ fd
 
 然后按中文提示输入。
 
-## 四、配置一个反代网站
+## 三、配置一个反代网站
 
 假设你想用：
 
@@ -119,7 +112,7 @@ https://proxy.example.com
 https://www.example.com
 ```
 
-## 五、反代 Google 示例
+## 四、反代 Google 示例
 
 如果你确实有合规授权和使用场景，可以这样填：
 
@@ -139,7 +132,7 @@ https://google-proxy.example.com
 
 注意：Google 这类大型网站通常有跳转、Cookie、登录、风控、地区策略和内容安全策略，简单反代不保证稳定。更推荐反代你自己的网站、API、对象存储、面板、内网服务，或者明确允许代理的上游。
 
-## 六、自动 HTTPS 前的准备
+## 五、自动 HTTPS 前的准备
 
 如果你选择自动 HTTPS，请先确认：
 
@@ -151,7 +144,7 @@ https://google-proxy.example.com
 
 如果 DNS 还没生效，可以先选择不申请 HTTPS，或者用命令模式加 `--http-only` 临时测试。
 
-## 七、只安装 Caddy
+## 六、只安装 Caddy
 
 如果你只想安装 Caddy，不配置反代：
 
@@ -165,7 +158,7 @@ fd --install-only
 bash <(curl -q -fsSL "https://gist.githubusercontent.com/Nyrazzy/019e6d147b7e69fa82fe08f783a52af7/raw/install-caddy.sh?$(date +%s)") --install-only
 ```
 
-## 八、不进菜单，直接命令配置
+## 七、不进菜单，直接命令配置
 
 如果你已经熟悉参数，也可以直接一条命令完成反代：
 
@@ -187,7 +180,7 @@ fd \
 
 等 DNS 生效后，再去掉 `--http-only` 重新运行一次。
 
-## 九、常用管理
+## 八、常用管理
 
 查看 Caddy 状态：
 
@@ -225,7 +218,7 @@ systemctl restart caddy
 journalctl -u caddy -f
 ```
 
-## 十、配置文件和备份
+## 九、配置文件和备份
 
 Caddy 配置文件位置：
 
@@ -241,7 +234,7 @@ Caddy 配置文件位置：
 
 如果配置错了，可以手动恢复备份。
 
-## 十一、支持的系统
+## 十、支持的系统
 
 脚本会自动判断系统并选择安装方式：
 
@@ -254,7 +247,7 @@ Caddy 配置文件位置：
 
 如果系统包管理器不支持，脚本会尝试安装 Caddy 官方静态二进制。
 
-## 十二、常见问题
+## 十一、常见问题
 
 ### 1. 输入 `fd` 没反应或找不到命令
 
