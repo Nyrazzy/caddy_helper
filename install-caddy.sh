@@ -828,7 +828,8 @@ update_script() {
 
   install -m 0755 "$tmp" /usr/local/bin/fd
   rm -f "$tmp"
-  log "脚本已更新到 /usr/local/bin/fd。重新运行 fd 即可使用新版。"
+  log "脚本已更新到 /usr/local/bin/fd。请重新运行 fd 使用新版。"
+  exit 0
 }
 
 uninstall_script() {
