@@ -270,6 +270,98 @@ EOF
   systemctl enable --now caddy
 }
 
+update_static_caddy() {
+  install_static
+}
+
+update_caddy() {
+  if ! has caddy; then
+    install_caddy
+    return
+  fi
+
+  log "当前版本：$(caddy version 2>/dev/null || printf '无法读取')"
+
+  if [ "$FORCE_STATIC" -eq 0 ]; then
+    if has apt-get && dpkg -s caddy >/dev/null 2>&1; then
+      apt-get update
+      local upgradable
+      upgradable="$(apt list --upgradable 2>/dev/null | awk -F/ '$1 == "caddy" { print }' || true)"
+      if [ -n "$upgradable" ]; then
+        log "发现 Caddy 可更新，正在升级..."
+        apt-get install --only-upgrade -y caddy
+      else
+        log "Caddy 已是当前软件源中的最新版本。"
+      fi
+      log "更新后版本：$(caddy version 2>/dev/null || printf '无法读取')"
+      return
+    elif has dnf && (rpm -q caddy >/dev/null 2>&1); then
+      if dnf check-update caddy >/dev/null 2>&1; then
+        log "Caddy 已是当前软件源中的最新版本。"
+      else
+        case "$?" in
+          100)
+            log "发现 Caddy 可更新，正在升级..."
+            dnf upgrade -y caddy
+            ;;
+          *)
+            warn "无法确认 Caddy 是否有更新，将尝试执行升级。"
+            dnf upgrade -y caddy || true
+            ;;
+        esac
+      fi
+      log "更新后版本：$(caddy version 2>/dev/null || printf '无法读取')"
+      return
+    elif has yum && (rpm -q caddy >/dev/null 2>&1); then
+      if yum check-update caddy >/dev/null 2>&1; then
+        log "Caddy 已是当前软件源中的最新版本。"
+      else
+        case "$?" in
+          100)
+            log "发现 Caddy 可更新，正在升级..."
+            yum update -y caddy
+            ;;
+          *)
+            warn "无法确认 Caddy 是否有更新，将尝试执行升级。"
+            yum update -y caddy || true
+            ;;
+        esac
+      fi
+      log "更新后版本：$(caddy version 2>/dev/null || printf '无法读取')"
+      return
+    elif has pacman && pacman -Q caddy >/dev/null 2>&1; then
+      log "正在通过 pacman 同步并更新 Caddy..."
+      pacman -Syu --noconfirm caddy
+      log "更新后版本：$(caddy version 2>/dev/null || printf '无法读取')"
+      return
+    elif has apk && apk info -e caddy >/dev/null 2>&1; then
+      log "正在通过 apk 检查并更新 Caddy..."
+      apk update || true
+      apk upgrade caddy || apk add --upgrade caddy
+      log "更新后版本：$(caddy version 2>/dev/null || printf '无法读取')"
+      return
+    elif has zypper && zypper search -i caddy >/dev/null 2>&1; then
+      log "正在通过 zypper 检查并更新 Caddy..."
+      zypper --non-interactive refresh
+      zypper --non-interactive update caddy || true
+      log "更新后版本：$(caddy version 2>/dev/null || printf '无法读取')"
+      return
+    fi
+  fi
+
+  warn "无法确认当前 Caddy 是否由系统包管理器安装，将使用官方静态二进制覆盖为最新版。"
+  update_static_caddy
+  log "更新后版本：$(caddy version 2>/dev/null || printf '无法读取')"
+}
+
+install_or_update_caddy() {
+  if has caddy; then
+    update_caddy
+  else
+    install_caddy
+  fi
+}
+
 install_caddy() {
   if has caddy; then
     log "Caddy already exists: $(command -v caddy)"
@@ -1017,10 +1109,10 @@ EOF
     choice="$(prompt '请输入编号' '2')"
     case "$choice" in
       1)
-        install_caddy
+        install_or_update_caddy
         open_firewall_ports
         restart_caddy
-        log "Caddy 已安装/启动"
+        log "Caddy 已安装/更新并启动"
         pause
         ;;
       2)
