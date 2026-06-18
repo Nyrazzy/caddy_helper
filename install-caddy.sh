@@ -5,7 +5,7 @@ set -Eeuo pipefail
 # Supports common Linux distributions and optional one-command reverse proxy setup.
 
 DEFAULT_SELF_URL="https://raw.githubusercontent.com/Nyrazzy/caddy_helper/refs/heads/main/install-caddy.sh"
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.0.1"
 DOMAIN=""
 UPSTREAM=""
 EMAIL=""
