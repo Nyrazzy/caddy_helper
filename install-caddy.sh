@@ -5,7 +5,7 @@ set -Eeuo pipefail
 # Supports common Linux distributions and optional one-command reverse proxy setup.
 
 DEFAULT_SELF_URL="https://raw.githubusercontent.com/Nyrazzy/caddy_helper/refs/heads/main/install-caddy.sh"
-SCRIPT_VERSION="1.0.1"
+SCRIPT_VERSION="1.0.2"
 DOMAIN=""
 UPSTREAM=""
 EMAIL=""
@@ -23,6 +23,7 @@ die() { err "$*"; exit 1; }
 has() { command -v "$1" >/dev/null 2>&1; }
 green_text() { printf '\033[1;32m%s\033[0m' "$*"; }
 red_text() { printf '\033[1;31m%s\033[0m' "$*"; }
+yellow_text() { printf '\033[1;33m%s\033[0m' "$*"; }
 
 usage() {
   cat <<'EOF'
@@ -552,7 +553,7 @@ print_proxy_list() {
   fi
 
   printf '\n当前反代列表：\n' >/dev/tty
-  local i mode status
+  local i mode config_status cert_status
   for i in "${!PROXY_DOMAINS[@]}"; do
     if [ "${PROXY_HTTP_ONLY[$i]}" = "1" ]; then
       mode="HTTP"
@@ -560,11 +561,12 @@ print_proxy_list() {
       mode="HTTPS"
     fi
     if proxy_is_success "${PROXY_DOMAINS[$i]}" "${PROXY_UPSTREAMS[$i]}"; then
-      status="$(green_text 成功)"
+      config_status="$(green_text 配置成功)"
     else
-      status="$(red_text 失败)"
+      config_status="$(red_text 配置失败)"
     fi
-    printf '  %s. %s  ->  %s  [%s]  %b\n' "$((i + 1))" "${PROXY_DOMAINS[$i]}" "${PROXY_UPSTREAMS[$i]}" "$mode" "$status" >/dev/tty
+    cert_status="$(cert_status_colored "${PROXY_DOMAINS[$i]}")"
+    printf '  %s. %s  ->  %s  [%s]  %b / %b\n' "$((i + 1))" "${PROXY_DOMAINS[$i]}" "${PROXY_UPSTREAMS[$i]}" "$mode" "$config_status" "$cert_status" >/dev/tty
   done
 }
 
@@ -578,6 +580,121 @@ proxy_is_success() {
   fi
   grep -Fq "$d" "$CADDYFILE" || return 1
   grep -Fq "$u" "$CADDYFILE" || return 1
+}
+
+get_domain_logs() {
+  local d="$1" lines="${2:-80}"
+  has journalctl || return 1
+  journalctl -u caddy -n 500 --no-pager 2>/dev/null | grep -F "$d" | tail -n "$lines" || true
+}
+
+tls_probe_output() {
+  local d="$1"
+  has openssl || return 1
+  if has timeout; then
+    timeout 8 openssl s_client -connect 127.0.0.1:443 -servername "$d" -showcerts </dev/null 2>&1 || true
+  else
+    openssl s_client -connect 127.0.0.1:443 -servername "$d" -showcerts </dev/null 2>&1 || true
+  fi
+}
+
+cert_status_plain() {
+  local d="$1" probe logs
+  if ! has caddy; then
+    printf 'Caddy未安装'
+    return
+  fi
+  if ! proxy_is_success "$d" "$(awk -F '\t' -v d="$d" '$1 == d { print $2; exit }' "$FD_DB" 2>/dev/null)"; then
+    printf '配置异常'
+    return
+  fi
+  probe="$(tls_probe_output "$d")"
+  if printf '%s\n' "$probe" | grep -q 'Verify return code: 0 (ok)'; then
+    printf '证书成功'
+    return
+  fi
+  logs="$(get_domain_logs "$d" 120)"
+  if printf '%s\n' "$logs" | grep -qi 'job failed\|could not get certificate'; then
+    printf '证书失败'
+  elif printf '%s\n' "$logs" | grep -qi 'obtaining certificate\|will retry\|trying to solve challenge'; then
+    printf '申请中'
+  else
+    printf '未就绪'
+  fi
+}
+
+cert_status_colored() {
+  local status
+  status="$(cert_status_plain "$1")"
+  case "$status" in
+    证书成功) green_text "$status" ;;
+    申请中|未就绪) yellow_text "$status" ;;
+    *) red_text "$status" ;;
+  esac
+}
+
+explain_cert_failure() {
+  local logs="$1"
+  if printf '%s\n' "$logs" | grep -qi 'served key authentication\|authorization finalized\|validations succeeded'; then
+    printf '  - 域名 HTTP 验证：已通过，说明域名解析和 80 端口基本正常。\n' >/dev/tty
+  elif printf '%s\n' "$logs" | grep -qi 'challenge'; then
+    printf '  - 域名 HTTP 验证：正在验证或验证失败，请检查域名解析、80 端口和安全组。\n' >/dev/tty
+  else
+    printf '  - 域名 HTTP 验证：没有看到成功记录，请检查域名是否解析到本机，以及 80 端口是否开放。\n' >/dev/tty
+  fi
+
+  if printf '%s\n' "$logs" | grep -qi 'creating new order\|new-nonce\|fetching new nonce'; then
+    printf '  - 失败步骤：向证书机构创建订单或获取 nonce 时失败。\n' >/dev/tty
+  elif printf '%s\n' "$logs" | grep -qi 'checking authorization status'; then
+    printf '  - 失败步骤：证书机构验证通过后，查询授权状态时失败。\n' >/dev/tty
+  elif printf '%s\n' "$logs" | grep -qi 'finalizing order'; then
+    printf '  - 失败步骤：证书机构最终签发证书时失败。\n' >/dev/tty
+  elif printf '%s\n' "$logs" | grep -qi 'obtaining certificate'; then
+    printf '  - 当前步骤：Caddy 正在申请证书，还没有完成。\n' >/dev/tty
+  else
+    printf '  - 失败步骤：日志里没有足够信息，需要继续观察 Caddy 日志。\n' >/dev/tty
+  fi
+
+  if printf '%s\n' "$logs" | grep -qi 'HTTP 500\|HTTP 503\|EOF\|connection reset\|unexpected end of JSON'; then
+    printf '  - 文字解释：Caddy 已经连到证书机构，但对方接口或中间网络返回异常。常见原因是证书机构临时故障、机房到证书机构网络不稳、IPv6 出口异常。\n' >/dev/tty
+  elif printf '%s\n' "$logs" | grep -qi 'rate'; then
+    printf '  - 文字解释：可能触发了证书机构限速，建议等待一段时间后再试。\n' >/dev/tty
+  elif printf '%s\n' "$logs" | grep -qi 'NXDOMAIN\|no such host\|SERVFAIL'; then
+    printf '  - 文字解释：DNS 解析异常，请检查域名 A/AAAA 记录。\n' >/dev/tty
+  else
+    printf '  - 文字解释：暂时无法自动归类，请优先看下面贴出的最近证书日志。\n' >/dev/tty
+  fi
+}
+
+show_certificate_detail() {
+  local d="$1" status logs probe
+  status="$(cert_status_plain "$d")"
+  printf '\n证书状态：' >/dev/tty
+  cert_status_colored "$d"
+  printf '\n' >/dev/tty
+
+  probe="$(tls_probe_output "$d")"
+  if [ "$status" = "证书成功" ]; then
+    printf '  - 本机 TLS 握手：成功。\n' >/dev/tty
+    printf '  - 浏览器如果仍然打不开，请检查 DNS 是否指向本机、公网 443 是否放行、是否经过 Cloudflare/CDN。\n' >/dev/tty
+    return
+  fi
+
+  if [ -n "$probe" ]; then
+    printf '\n本机 TLS 检测摘要：\n' >/dev/tty
+    printf '%s\n' "$probe" | grep -E 'Verify return code|alert|error:|connect:|CONNECTED|issuer=|subject=' | tail -n 12 >/dev/tty || true
+  fi
+
+  logs="$(get_domain_logs "$d" 40)"
+  printf '\n证书申请诊断：\n' >/dev/tty
+  explain_cert_failure "$logs"
+
+  printf '\n最近相关日志：\n' >/dev/tty
+  if [ -n "$logs" ]; then
+    printf '%s\n' "$logs" >/dev/tty
+  else
+    printf '  没有找到该域名的 Caddy 证书日志。\n' >/dev/tty
+  fi
 }
 
 upsert_proxy_db() {
@@ -759,6 +876,7 @@ show_caddyfile() {
           ;;
       esac
       printf '\t}\n}\n\n' >/dev/tty
+      show_certificate_detail "$d"
       ;;
   esac
 
@@ -811,6 +929,16 @@ show_status() {
   fi
 
   printf '  - 反代数量：%s 个。\n' "$(proxy_count)" >/dev/tty
+  load_proxy_arrays
+  if [ "${#PROXY_DOMAINS[@]}" -gt 0 ]; then
+    printf '  - 证书概览：\n' >/dev/tty
+    local i
+    for i in "${!PROXY_DOMAINS[@]}"; do
+      printf '    %s：' "${PROXY_DOMAINS[$i]}" >/dev/tty
+      cert_status_colored "${PROXY_DOMAINS[$i]}"
+      printf '\n' >/dev/tty
+    done
+  fi
 
   if has ss; then
     if ss -lnt 2>/dev/null | awk '{print $4}' | grep -Eq '(:80|:443)$'; then
