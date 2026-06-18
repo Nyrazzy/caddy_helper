@@ -20,6 +20,8 @@ err() { printf '\033[1;31m[ERR]\033[0m %s\n' "$*" >&2; }
 danger() { printf '\033[1;31m%s\033[0m\n' "$*" >/dev/tty; }
 die() { err "$*"; exit 1; }
 has() { command -v "$1" >/dev/null 2>&1; }
+green_text() { printf '\033[1;32m%s\033[0m' "$*"; }
+red_text() { printf '\033[1;31m%s\033[0m' "$*"; }
 
 usage() {
   cat <<'EOF'
@@ -296,6 +298,18 @@ normalize_url_host() {
   printf '%s\n' "$1" | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#/.*$##; s#:.*$##'
 }
 
+normalize_upstream_url() {
+  local value scheme rest host
+  value="$1"
+  case "$value" in
+    http://*) scheme="http"; rest="${value#http://}" ;;
+    https://*) scheme="https"; rest="${value#https://}" ;;
+    *) scheme="https"; rest="$value" ;;
+  esac
+  host="$(printf '%s\n' "$rest" | sed -E 's#[/?#].*$##')"
+  printf '%s://%s' "$scheme" "$host"
+}
+
 is_ipv4() {
   local value="$1" part
   [[ "$value" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
@@ -334,6 +348,7 @@ is_valid_domain() {
 is_valid_upstream() {
   local value="$1" host port
   [[ "$value" == http://* || "$value" == https://* ]] || return 1
+  [[ "$value" != *"/"* || "$value" =~ ^https?://[^/]+/?$ ]] || return 1
   host="$(normalize_url_host "$value")"
   [ -n "$host" ] || return 1
   port="$(printf '%s\n' "$value" | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#/.*$##' | awk -F: 'NF > 1 { print $NF }')"
@@ -402,6 +417,7 @@ ensure_proxy_db() {
 
 load_proxy_arrays() {
   ensure_proxy_db
+  normalize_proxy_db
   PROXY_DOMAINS=()
   PROXY_UPSTREAMS=()
   PROXY_HTTP_ONLY=()
@@ -413,6 +429,21 @@ load_proxy_arrays() {
     PROXY_HTTP_ONLY+=("${h:-0}")
     PROXY_EMAILS+=("${e:-}")
   done <"$FD_DB"
+}
+
+normalize_proxy_db() {
+  [ -f "$FD_DB" ] || return
+  local tmp d u h e clean
+  tmp="$(mktemp)"
+  while IFS="$(printf '\t')" read -r d u h e; do
+    [ -n "${d:-}" ] || continue
+    clean="$(normalize_upstream_url "$u")"
+    if is_valid_domain "$d" && is_valid_upstream "$clean"; then
+      awk -F '\t' -v d="$d" '$1 == d { found = 1 } END { exit found ? 0 : 1 }' "$tmp" 2>/dev/null && continue
+      printf '%s\t%s\t%s\t%s\n' "$d" "$clean" "${h:-0}" "${e:-}" >>"$tmp"
+    fi
+  done <"$FD_DB"
+  mv "$tmp" "$FD_DB"
 }
 
 proxy_count() {
@@ -428,15 +459,32 @@ print_proxy_list() {
   fi
 
   printf '\n当前反代列表：\n' >/dev/tty
-  local i mode
+  local i mode status
   for i in "${!PROXY_DOMAINS[@]}"; do
     if [ "${PROXY_HTTP_ONLY[$i]}" = "1" ]; then
       mode="HTTP"
     else
       mode="HTTPS"
     fi
-    printf '  %s. %s  ->  %s  [%s]\n' "$((i + 1))" "${PROXY_DOMAINS[$i]}" "${PROXY_UPSTREAMS[$i]}" "$mode" >/dev/tty
+    if proxy_is_success "${PROXY_DOMAINS[$i]}" "${PROXY_UPSTREAMS[$i]}"; then
+      status="$(green_text 成功)"
+    else
+      status="$(red_text 失败)"
+    fi
+    printf '  %s. %s  ->  %s  [%s]  %b\n' "$((i + 1))" "${PROXY_DOMAINS[$i]}" "${PROXY_UPSTREAMS[$i]}" "$mode" "$status" >/dev/tty
   done
+}
+
+proxy_is_success() {
+  local d="$1" u="$2"
+  has caddy || return 1
+  [ -f "$CADDYFILE" ] || return 1
+  caddy validate --config "$CADDYFILE" >/dev/null 2>&1 || return 1
+  if has systemctl; then
+    systemctl is-active --quiet caddy || return 1
+  fi
+  grep -Fq "$d" "$CADDYFILE" || return 1
+  grep -Fq "$u" "$CADDYFILE" || return 1
 }
 
 upsert_proxy_db() {
@@ -459,10 +507,11 @@ delete_proxy_db_index() {
 
 render_caddyfile() {
   ensure_proxy_db
-  backup_caddyfile
+  normalize_proxy_db
 
-  local global_email
+  local global_email tmp
   global_email="$(awk -F '\t' '$4 != "" { print $4; exit }' "$FD_DB")"
+  tmp="$(mktemp)"
 
   {
     printf '# This Caddyfile is managed by fd Caddy reverse proxy helper.\n'
@@ -498,20 +547,34 @@ render_caddyfile() {
       printf '\t}\n'
       printf '}\n\n'
     done <"$FD_DB"
-  } >"$CADDYFILE"
+  } >"$tmp"
 
   if has caddy; then
-    caddy fmt --overwrite "$CADDYFILE" || true
-    if ! caddy validate --config "$CADDYFILE"; then
-      warn "Caddy 配置校验失败，请查看：$CADDYFILE"
+    caddy fmt --overwrite "$tmp" || true
+    if ! caddy validate --config "$tmp"; then
+      rm -f "$tmp"
+      warn "Caddy 配置校验失败，正式配置未修改。"
       return 1
     fi
   fi
+
+  backup_caddyfile
+  install -m 0644 "$tmp" "$CADDYFILE"
+  rm -f "$tmp"
 }
 
 write_caddyfile() {
+  local old_db
+  ensure_proxy_db
+  old_db="$(mktemp)"
+  cp -a "$FD_DB" "$old_db"
   upsert_proxy_db
-  render_caddyfile
+  if ! render_caddyfile; then
+    cp -a "$old_db" "$FD_DB"
+    rm -f "$old_db"
+    return 1
+  fi
+  rm -f "$old_db"
 }
 
 open_firewall_ports() {
@@ -779,6 +842,7 @@ uninstall_script() {
   fi
   rm -f /usr/local/bin/fd
   log "fd 脚本助手已卸载。"
+  exit 0
 }
 
 remove_caddy_package() {
@@ -855,6 +919,7 @@ menu_add_proxy() {
     warn "反代目标不合法。示例：https://www.example.com 或 http://127.0.0.1:3000。已返回主菜单。"
     return
   fi
+  UPSTREAM="$(normalize_upstream_url "$UPSTREAM")"
 
   local use_https email_answer
   use_https="$(prompt '是否自动申请 HTTPS 证书？输入 y 或 n' 'y')"
@@ -1039,6 +1104,7 @@ if [ -n "$DOMAIN$UPSTREAM" ]; then
     *) UPSTREAM="https://${UPSTREAM}" ;;
   esac
   is_valid_upstream "$UPSTREAM" || die "反代目标不合法，示例：https://www.example.com 或 http://127.0.0.1:3000"
+  UPSTREAM="$(normalize_upstream_url "$UPSTREAM")"
   is_valid_email "$EMAIL" || die "邮箱格式不合法"
   configure_proxy
   log "Version: $(caddy version 2>/dev/null || true)"
