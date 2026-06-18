@@ -5,6 +5,7 @@ set -Eeuo pipefail
 # Supports common Linux distributions and optional one-command reverse proxy setup.
 
 DEFAULT_SELF_URL="https://raw.githubusercontent.com/Nyrazzy/caddy_helper/refs/heads/main/install-caddy.sh"
+SCRIPT_VERSION="1.0.0"
 DOMAIN=""
 UPSTREAM=""
 EMAIL=""
@@ -1083,9 +1084,9 @@ menu_delete_proxy() {
 main_menu() {
   while true; do
     clear >/dev/tty 2>/dev/null || true
-    cat >/dev/tty <<'EOF'
+    cat >/dev/tty <<EOF
 ========================================
-  Caddy 反代助手
+  Caddy 反代助手 v${SCRIPT_VERSION}
 ========================================
   1. 安装 / 更新 Caddy
   2. 新增 / 修改反代网站
