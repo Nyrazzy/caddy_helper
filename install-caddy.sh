@@ -865,38 +865,79 @@ menu_restore_backup() {
     return
   fi
 
-  printf '\n可恢复的备份：\n' >/dev/tty
+  printf '\nCaddyfile 备份列表：\n' >/dev/tty
   local i
   for i in "${!backups[@]}"; do
     printf '  %s. %s\n' "$((i + 1))" "${backups[$i]}" >/dev/tty
   done
+  printf '\n  1. 恢复某个备份\n' >/dev/tty
+  printf '  2. 删除某个备份\n' >/dev/tty
+  danger "  3. 删除所有备份"
   printf '  0. 返回\n' >/dev/tty
 
-  local choice ok
-  choice="$(prompt '请选择要恢复的备份' '0')"
-  [ "$choice" = "0" ] && return
-  if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#backups[@]}" ]; then
-    warn "编号无效，已返回主菜单。"
-    return
-  fi
+  local action choice ok
+  action="$(prompt '请选择操作' '1')"
+  case "$action" in
+    0|"")
+      return
+      ;;
+    1)
+      choice="$(prompt '请输入要恢复的备份编号' '0')"
+      [ "$choice" = "0" ] && return
+      if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#backups[@]}" ]; then
+        warn "编号无效，已返回主菜单。"
+        return
+      fi
 
-  printf '\n即将恢复：%s\n' "${backups[$((choice - 1))]}" >/dev/tty
-  ok="$(prompt '确认恢复？输入 y 继续' 'n')"
-  if [ "$ok" != "y" ] && [ "$ok" != "Y" ]; then
-    warn "已取消，返回主菜单。"
-    return
-  fi
+      printf '\n即将恢复：%s\n' "${backups[$((choice - 1))]}" >/dev/tty
+      ok="$(prompt '确认恢复？输入 y 继续' 'n')"
+      if [ "$ok" != "y" ] && [ "$ok" != "Y" ]; then
+        warn "已取消，返回主菜单。"
+        return
+      fi
 
-  backup_caddyfile
-  cp -a "${backups[$((choice - 1))]}" "$CADDYFILE"
-  rm -f "$FD_DB"
-  ensure_proxy_db
-  if caddy validate --config "$CADDYFILE" --adapter caddyfile; then
-    reload_caddy
-    log "备份已恢复。"
-  else
-    warn "备份已复制，但配置校验失败。请查看配置后手动处理：nano $CADDYFILE"
-  fi
+      backup_caddyfile
+      cp -a "${backups[$((choice - 1))]}" "$CADDYFILE"
+      rm -f "$FD_DB"
+      ensure_proxy_db
+      if caddy validate --config "$CADDYFILE" --adapter caddyfile; then
+        reload_caddy
+        log "备份已恢复。"
+      else
+        warn "备份已复制，但配置校验失败。请查看配置后手动处理：nano $CADDYFILE"
+      fi
+      ;;
+    2)
+      choice="$(prompt '请输入要删除的备份编号' '0')"
+      [ "$choice" = "0" ] && return
+      if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#backups[@]}" ]; then
+        warn "编号无效，已返回主菜单。"
+        return
+      fi
+
+      printf '\n即将删除：%s\n' "${backups[$((choice - 1))]}" >/dev/tty
+      ok="$(prompt '确认删除？输入 y 继续' 'n')"
+      if [ "$ok" != "y" ] && [ "$ok" != "Y" ]; then
+        warn "已取消，返回主菜单。"
+        return
+      fi
+      rm -f -- "${backups[$((choice - 1))]}"
+      log "备份已删除。"
+      ;;
+    3)
+      danger "危险操作：删除所有 Caddyfile 备份。"
+      ok="$(prompt '确认删除所有备份？输入 DELETE 继续' 'n')"
+      if [ "$ok" != "DELETE" ]; then
+        warn "已取消，返回主菜单。"
+        return
+      fi
+      rm -f -- "${backups[@]}"
+      log "所有 Caddyfile 备份已删除。"
+      ;;
+    *)
+      warn "请输入菜单里显示的编号。"
+      ;;
+  esac
 }
 
 update_script() {
