@@ -5,7 +5,7 @@ set -Eeuo pipefail
 # Supports common Linux distributions and optional one-command reverse proxy setup.
 
 DEFAULT_SELF_URL="https://raw.githubusercontent.com/Nyrazzy/caddy_helper/refs/heads/main/install-caddy.sh"
-SCRIPT_VERSION="1.0.2"
+SCRIPT_VERSION="1.0.3"
 DOMAIN=""
 UPSTREAM=""
 EMAIL=""
@@ -588,6 +588,12 @@ get_domain_logs() {
   journalctl -u caddy -n 500 --no-pager 2>/dev/null | grep -F "$d" | tail -n "$lines" || true
 }
 
+get_domain_logs_since() {
+  local d="$1" since="$2" lines="${3:-80}"
+  has journalctl || return 1
+  journalctl -u caddy --since "@$since" --no-pager 2>/dev/null | grep -F "$d" | tail -n "$lines" || true
+}
+
 tls_probe_output() {
   local d="$1"
   has openssl || return 1
@@ -596,6 +602,20 @@ tls_probe_output() {
   else
     openssl s_client -connect 127.0.0.1:443 -servername "$d" -showcerts </dev/null 2>&1 || true
   fi
+}
+
+certificate_matches_domain() {
+  local d="$1" cert_info
+  has openssl || return 1
+  if has timeout; then
+    cert_info="$(timeout 8 openssl s_client -connect 127.0.0.1:443 -servername "$d" </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -dates -ext subjectAltName 2>/dev/null || true)"
+  else
+    cert_info="$(openssl s_client -connect 127.0.0.1:443 -servername "$d" </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -dates -ext subjectAltName 2>/dev/null || true)"
+  fi
+  [ -n "$cert_info" ] || return 1
+  printf '%s\n' "$cert_info" | grep -Fq "DNS:$d" && return 0
+  printf '%s\n' "$cert_info" | grep -Fq "CN = $d" && return 0
+  return 1
 }
 
 cert_status_plain() {
@@ -609,7 +629,7 @@ cert_status_plain() {
     return
   fi
   probe="$(tls_probe_output "$d")"
-  if printf '%s\n' "$probe" | grep -q 'Verify return code: 0 (ok)'; then
+  if printf '%s\n' "$probe" | grep -q 'Verify return code: 0 (ok)' && certificate_matches_domain "$d"; then
     printf '证书成功'
     return
   fi
@@ -632,6 +652,27 @@ cert_status_colored() {
     *) red_text "$status" ;;
   esac
 }
+
+cert_status_plain_from_logs() {
+  local d="$1" logs="$2" probe
+  if ! has caddy; then
+    printf 'Caddy未安装'
+    return
+  fi
+  probe="$(tls_probe_output "$d")"
+  if printf '%s\n' "$probe" | grep -q 'Verify return code: 0 (ok)' && certificate_matches_domain "$d"; then
+    printf '证书成功'
+    return
+  fi
+  if printf '%s\n' "$logs" | grep -qi 'job failed\|could not get certificate'; then
+    printf '证书失败'
+  elif printf '%s\n' "$logs" | grep -qi 'obtaining certificate\|will retry\|trying to solve challenge\|validations succeeded\|finalizing order'; then
+    printf '申请中'
+  else
+    printf '未就绪'
+  fi
+}
+
 
 explain_cert_failure() {
   local logs="$1"
@@ -697,6 +738,68 @@ show_certificate_detail() {
   fi
 }
 
+watch_certificate_obtain() {
+  local d="$1" start end last_line logs status
+  [ "$HTTP_ONLY" -eq 0 ] || return
+  has journalctl || {
+    warn "当前系统没有 journalctl，无法自动跟踪证书申请日志。"
+    return
+  }
+
+  printf '\n开始跟踪证书申请状态，最多等待 180 秒...\n' >/dev/tty
+  printf '如果中途失败，会显示失败步骤、原因解释和相关日志。\n' >/dev/tty
+
+  start="$(date +%s)"
+  end=$((start + 180))
+  last_line=""
+
+  while [ "$(date +%s)" -le "$end" ]; do
+    logs="$(get_domain_logs_since "$d" "$start" 30)"
+    status="$(cert_status_plain_from_logs "$d" "$logs")"
+
+    if [ -n "$logs" ]; then
+      local latest
+      latest="$(printf '%s\n' "$logs" | tail -n 1)"
+      if [ -n "$latest" ] && [ "$latest" != "$last_line" ]; then
+        printf '%s\n' "$latest" >/dev/tty
+        last_line="$latest"
+      fi
+    fi
+
+    case "$status" in
+      证书成功)
+        log "证书申请完成：${d}"
+        return
+        ;;
+      证书失败)
+        warn "证书申请失败：${d}"
+        printf '\n失败诊断：\n' >/dev/tty
+        explain_cert_failure "$logs"
+        printf '\n失败相关日志：\n' >/dev/tty
+        if [ -n "$logs" ]; then
+          printf '%s\n' "$logs" >/dev/tty
+        else
+          printf '  没有找到该域名的 Caddy 证书日志。\n' >/dev/tty
+        fi
+        return
+        ;;
+    esac
+
+    sleep 5
+  done
+
+  warn "证书申请还未完成，Caddy 会在后台继续重试。"
+  logs="$(get_domain_logs "$d" 40)"
+  printf '\n当前诊断：\n' >/dev/tty
+  explain_cert_failure "$logs"
+  printf '\n最近相关日志：\n' >/dev/tty
+  if [ -n "$logs" ]; then
+    printf '%s\n' "$logs" >/dev/tty
+  else
+    printf '  没有找到该域名的 Caddy 证书日志。\n' >/dev/tty
+  fi
+}
+
 upsert_proxy_db() {
   ensure_proxy_db
   local tmp
@@ -746,7 +849,6 @@ render_caddyfile() {
       printf '\tencode zstd gzip\n'
       printf '\treverse_proxy %s {\n' "$u"
       printf '\t\theader_up Host %s\n' "$upstream_host"
-      printf '\t\theader_up X-Forwarded-Host {host}\n'
       case "$u" in
         https://*)
           printf '\t\ttransport http {\n'
@@ -760,12 +862,17 @@ render_caddyfile() {
   } >"$tmp"
 
   if has caddy; then
-    caddy fmt --overwrite "$tmp" || true
-    if ! caddy validate --config "$tmp" --adapter caddyfile; then
+    caddy fmt --overwrite "$tmp" >/dev/null 2>&1 || true
+    local validate_log
+    validate_log="$(mktemp)"
+    if ! caddy validate --config "$tmp" --adapter caddyfile >"$validate_log" 2>&1; then
+      cat "$validate_log" >/dev/tty
+      rm -f "$validate_log"
       rm -f "$tmp"
       warn "Caddy 配置校验失败，正式配置未修改。"
       return 1
     fi
+    rm -f "$validate_log"
   fi
 
   backup_caddyfile
@@ -818,6 +925,7 @@ configure_proxy() {
   restart_caddy
   log "反代已配置：${DOMAIN} -> ${UPSTREAM}"
   log "配置文件：/etc/caddy/Caddyfile"
+  watch_certificate_obtain "$DOMAIN"
 }
 
 show_caddyfile() {
@@ -867,7 +975,6 @@ show_caddyfile() {
       printf '\tencode zstd gzip\n' >/dev/tty
       printf '\treverse_proxy %s {\n' "$u" >/dev/tty
       printf '\t\theader_up Host %s\n' "$upstream_host" >/dev/tty
-      printf '\t\theader_up X-Forwarded-Host {host}\n' >/dev/tty
       case "$u" in
         https://*)
           printf '\t\ttransport http {\n' >/dev/tty
@@ -1190,10 +1297,13 @@ menu_add_proxy() {
     HTTP_ONLY=1
   else
     HTTP_ONLY=0
-    email_answer="$(prompt '请输入证书邮箱，可直接回车跳过')"
+    email_answer="$(prompt '请输入证书邮箱，强烈建议填写，用于提高签发稳定性和接收续期通知，可回车跳过')"
     if ! is_valid_email "$email_answer"; then
       warn "邮箱格式不合法，已返回主菜单。"
       return
+    fi
+    if [ -z "$email_answer" ]; then
+      warn "未填写邮箱也可以继续，但证书申请失败概率可能更高。"
     fi
     EMAIL="$email_answer"
   fi
