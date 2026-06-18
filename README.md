@@ -317,7 +317,7 @@ fd
 不要这样运行交互菜单：
 
 ```bash
-curl -fsSL "脚本地址" | bash
+curl -fsSL "https://gist.githubusercontent.com/Nyrazzy/019e6d147b7e69fa82fe08f783a52af7/raw/install-caddy.sh" | bash
 ```
 
 这种方式可能导致中文菜单输入异常。
@@ -325,5 +325,5 @@ curl -fsSL "脚本地址" | bash
 推荐使用：
 
 ```bash
-bash <(curl -q -fsSL "脚本地址?$(date +%s)")
+bash <(curl -q -fsSL "https://gist.githubusercontent.com/Nyrazzy/019e6d147b7e69fa82fe08f783a52af7/raw/install-caddy.sh?$(date +%s)")
 ```
