@@ -1,43 +1,34 @@
 # Caddy 反代助手使用教程
 
-这是一个适合放在 GitHub Gist 里的 Caddy 一键安装和反代管理脚本。
-
-第一次安装后，以后只需要在服务器里输入：
+这是一个 Caddy 一键安装、反代配置和管理脚本。第一次安装后，以后在服务器里输入：
 
 ```bash
 fd
 ```
 
-就会打开中文菜单。你按提示输入自己的域名和想反代的网站即可。
+就会打开中文菜单。
 
-> 本教程默认你已经是 `root` 用户。如果你不是 root，请在命令前加 `sudo`，或者先执行 `sudo -i` 切换到 root。
+本教程默认你已经是 `root` 用户。如果不是 root，请先执行 `sudo -i` 切换到 root。
 
-
-后面的命令可以直接复制使用。
-
-## 一、第一次安装
+## 第一次安装
 
 在 root 用户下执行：
 
 ```bash
-bash <(curl -q -fsSL "https://gist.githubusercontent.com/Nyrazzy/019e6d147b7e69fa82fe08f783a52af7/raw/install-caddy.sh?$(date +%s)") \
+bash <(curl -q -fsSL "https://raw.githubusercontent.com/Nyrazzy/caddy_helper/refs/heads/main/install-caddy.sh?$(date +%s)") \
   --install-shortcut \
-  --self-url "https://gist.githubusercontent.com/Nyrazzy/019e6d147b7e69fa82fe08f783a52af7/raw/install-caddy.sh"
+  --self-url "https://raw.githubusercontent.com/Nyrazzy/caddy_helper/refs/heads/main/install-caddy.sh"
 ```
 
-这一步会做几件事：
-
-- 安装 `fd` 快捷命令
-- 打开中文菜单
-- 以后运行 `fd` 时自动拉取 Gist 最新版脚本
-
-安装完成后，以后直接输入：
+安装完成后，以后直接运行：
 
 ```bash
 fd
 ```
 
-## 二、菜单功能
+这个快捷命令会从 GitHub 拉取最新版脚本。
+
+## 菜单功能
 
 运行：
 
@@ -53,36 +44,24 @@ fd
 ========================================
   1. 安装 / 更新 Caddy
   2. 新增 / 修改反代网站
-  3. 查看当前配置
-  4. 检查 Caddy 状态
-  5. 重载 Caddy 配置
-  6. 查看最近日志
-  7. 安装/修复 fd 快捷命令
+  3. 删除反代网站
+  4. 查看当前配置
+  5. 检查 Caddy 状态
+  6. 重载 Caddy 配置
+  7. 查看最近日志
+  8. 安装/修复 fd 快捷命令
+  9. 恢复 Caddyfile 备份
+
+  91. 更新 fd 脚本
+  98. 卸载 Caddy（彻底删除配置和证书）
+  99. 卸载 fd 脚本助手
   0. 退出
 ========================================
 ```
 
-最常用的是选：
+`98` 和 `99` 是危险操作，脚本里会用红字显示，并要求输入 `DELETE` 才会继续。
 
-```text
-2. 新增 / 修改反代网站
-```
-
-然后按中文提示输入。
-
-## 三、配置一个反代网站
-
-假设你想用：
-
-```text
-proxy.example.com
-```
-
-反代：
-
-```text
-https://www.example.com
-```
+## 新增或修改反代
 
 运行：
 
@@ -90,7 +69,13 @@ https://www.example.com
 fd
 ```
 
-选择 `2`，然后按提示填写：
+选择：
+
+```text
+2. 新增 / 修改反代网站
+```
+
+按提示输入：
 
 ```text
 请输入你要对外访问的域名，例如 proxy.example.com: proxy.example.com
@@ -112,7 +97,216 @@ https://proxy.example.com
 https://www.example.com
 ```
 
-## 四、反代 Google 示例
+如果你重新添加同一个对外域名，脚本会覆盖旧配置。
+
+## 输入校验
+
+脚本会检查你输入的内容是否像正常域名或地址。
+
+合法示例：
+
+```text
+proxy.example.com
+https://www.example.com
+http://127.0.0.1:3000
+http://localhost:8080
+```
+
+不合法示例：
+
+```text
+sbisofnb
+https://ubifssv
+abc
+```
+
+如果输入不合法，脚本会提示原因并返回主菜单，不会写入配置。
+
+## 删除反代
+
+运行：
+
+```bash
+fd
+```
+
+选择：
+
+```text
+3. 删除反代网站
+```
+
+脚本会列出当前反代：
+
+```text
+当前反代列表：
+  1. proxy.example.com  ->  https://www.example.com  [HTTPS]
+  2. api.example.com    ->  http://127.0.0.1:3000   [HTTPS]
+```
+
+输入编号并确认后，脚本会：
+
+- 从脚本记录中删除该反代
+- 重新生成 `/etc/caddy/Caddyfile`
+- 检查 Caddy 配置
+- 自动重载 Caddy
+
+删除前会自动备份旧配置。
+
+## 查看当前配置
+
+选择：
+
+```text
+4. 查看当前配置
+```
+
+脚本会先显示直观列表：
+
+```text
+当前反代列表：
+  1. proxy.example.com  ->  https://www.example.com  [HTTPS]
+```
+
+然后你可以：
+
+- 输入编号：查看某一个反代的详细 Caddy 配置片段
+- 输入 `a`：查看完整 `/etc/caddy/Caddyfile`
+- 输入 `0`：返回菜单
+
+如果需要手动修改：
+
+```bash
+nano /etc/caddy/Caddyfile
+```
+
+修改完成后记得检查并重载：
+
+```bash
+caddy validate --config /etc/caddy/Caddyfile && systemctl reload caddy
+```
+
+## 检查 Caddy 状态
+
+选择：
+
+```text
+5. 检查 Caddy 状态
+```
+
+脚本会用文字告诉你：
+
+- Caddy 是否已安装
+- Caddy 是否正在运行
+- 是否已开机启动
+- 配置语法是否正确
+- 当前有几个反代
+- 80/443 端口是否有监听
+- 最近日志有没有明显警告
+
+不会直接输出一大段 `systemctl status` 原文。
+
+## 恢复备份
+
+选择：
+
+```text
+9. 恢复 Caddyfile 备份
+```
+
+脚本会列出所有备份：
+
+```text
+1. /etc/caddy/Caddyfile.bak.20260619010101
+2. /etc/caddy/Caddyfile.bak.20260619005912
+```
+
+输入编号后，脚本会恢复该备份、重新识别反代记录，并重载 Caddy。
+
+## 更新脚本
+
+选择：
+
+```text
+91. 更新 fd 脚本
+```
+
+脚本会从下面这个地址拉取最新版：
+
+```text
+https://raw.githubusercontent.com/Nyrazzy/caddy_helper/refs/heads/main/install-caddy.sh
+```
+
+更新后重新运行：
+
+```bash
+fd
+```
+
+即可使用新版。
+
+## 卸载 fd 脚本助手
+
+选择：
+
+```text
+99. 卸载 fd 脚本助手
+```
+
+这个功能只会删除：
+
+```bash
+/usr/local/bin/fd
+```
+
+不会卸载 Caddy，也不会删除 Caddy 配置。
+
+脚本会要求输入：
+
+```text
+DELETE
+```
+
+才会继续。
+
+## 彻底卸载 Caddy
+
+选择：
+
+```text
+98. 卸载 Caddy（彻底删除配置和证书）
+```
+
+这个功能会尽量删除干净，包括：
+
+- Caddy 程序
+- Caddy 服务
+- Caddy 配置
+- Caddy 自动申请的证书数据
+- Caddy 日志
+- 脚本保存的反代记录
+- `caddy` 系统用户和用户组
+
+常见删除路径：
+
+```bash
+/etc/caddy
+/var/lib/caddy
+/var/log/caddy
+/usr/bin/caddy
+/usr/local/bin/caddy
+/etc/systemd/system/caddy.service
+```
+
+脚本会要求输入：
+
+```text
+DELETE
+```
+
+才会继续。
+
+## 反代 Google 示例
 
 如果你确实有合规授权和使用场景，可以这样填：
 
@@ -124,17 +318,11 @@ https://www.example.com
 确认执行？输入 y 继续 [y]: y
 ```
 
-然后访问：
-
-```text
-https://google-proxy.example.com
-```
-
 注意：Google 这类大型网站通常有跳转、Cookie、登录、风控、地区策略和内容安全策略，简单反代不保证稳定。更推荐反代你自己的网站、API、对象存储、面板、内网服务，或者明确允许代理的上游。
 
-## 五、自动 HTTPS 前的准备
+## 自动 HTTPS 前的准备
 
-如果你选择自动 HTTPS，请先确认：
+如果你选择自动 HTTPS，请确认：
 
 - 域名已经解析到这台服务器 IP
 - 服务器 80 端口开放
@@ -144,23 +332,9 @@ https://google-proxy.example.com
 
 如果 DNS 还没生效，可以先选择不申请 HTTPS，或者用命令模式加 `--http-only` 临时测试。
 
-## 六、只安装 Caddy
+## 不进菜单，直接命令配置
 
-如果你只想安装 Caddy，不配置反代：
-
-```bash
-fd --install-only
-```
-
-或者第一次就只安装：
-
-```bash
-bash <(curl -q -fsSL "https://gist.githubusercontent.com/Nyrazzy/019e6d147b7e69fa82fe08f783a52af7/raw/install-caddy.sh?$(date +%s)") --install-only
-```
-
-## 七、不进菜单，直接命令配置
-
-如果你已经熟悉参数，也可以直接一条命令完成反代：
+安装快捷命令后，可以直接运行：
 
 ```bash
 fd \
@@ -178,23 +352,21 @@ fd \
   --http-only
 ```
 
-等 DNS 生效后，再去掉 `--http-only` 重新运行一次。
-
-## 八、常用管理
-
-查看 Caddy 状态：
+只安装 Caddy：
 
 ```bash
-systemctl status caddy
+fd --install-only
 ```
 
-查看配置文件：
+## 常用命令
+
+查看配置：
 
 ```bash
 cat /etc/caddy/Caddyfile
 ```
 
-检查配置是否正确：
+检查配置：
 
 ```bash
 caddy validate --config /etc/caddy/Caddyfile
@@ -206,35 +378,13 @@ caddy validate --config /etc/caddy/Caddyfile
 systemctl reload caddy
 ```
 
-重启 Caddy：
-
-```bash
-systemctl restart caddy
-```
-
 查看日志：
 
 ```bash
 journalctl -u caddy -f
 ```
 
-## 九、配置文件和备份
-
-Caddy 配置文件位置：
-
-```bash
-/etc/caddy/Caddyfile
-```
-
-每次用脚本修改反代配置前，都会自动备份旧配置：
-
-```bash
-/etc/caddy/Caddyfile.bak.时间戳
-```
-
-如果配置错了，可以手动恢复备份。
-
-## 十、支持的系统
+## 支持的系统
 
 脚本会自动判断系统并选择安装方式：
 
@@ -247,16 +397,14 @@ Caddy 配置文件位置：
 
 如果系统包管理器不支持，脚本会尝试安装 Caddy 官方静态二进制。
 
-## 十一、常见问题
+## 重新安装快捷命令
 
-### 1. 输入 `fd` 没反应或找不到命令
-
-重新安装快捷命令：
+如果输入 `fd` 提示找不到命令，重新执行：
 
 ```bash
-bash <(curl -q -fsSL "https://gist.githubusercontent.com/Nyrazzy/019e6d147b7e69fa82fe08f783a52af7/raw/install-caddy.sh?$(date +%s)") \
+bash <(curl -q -fsSL "https://raw.githubusercontent.com/Nyrazzy/caddy_helper/refs/heads/main/install-caddy.sh?$(date +%s)") \
   --install-shortcut \
-  --self-url "https://gist.githubusercontent.com/Nyrazzy/019e6d147b7e69fa82fe08f783a52af7/raw/install-caddy.sh"
+  --self-url "https://raw.githubusercontent.com/Nyrazzy/caddy_helper/refs/heads/main/install-caddy.sh"
 ```
 
 然后检查：
@@ -271,59 +419,10 @@ which fd
 /usr/local/bin/fd
 ```
 
-### 2. 证书申请失败
+## 临时运行脚本
 
-优先检查：
-
-- 域名是否解析到当前服务器
-- 80 和 443 端口是否开放
-- 云厂商安全组是否放行
-- 是否有其他程序占用了 80 或 443
-
-查看端口占用：
+如果只是临时打开一次菜单，不安装 `fd`，可以运行：
 
 ```bash
-ss -lntp | grep -E ':80|:443'
-```
-
-### 3. 反代后打不开
-
-检查 Caddy 状态和日志：
-
-```bash
-systemctl status caddy
-journalctl -u caddy -n 100 --no-pager
-```
-
-也可以在菜单里选：
-
-```text
-4. 检查 Caddy 状态
-6. 查看最近日志
-```
-
-### 4. 想更新脚本
-
-如果你是用 `--self-url` 安装的快捷命令，以后直接运行：
-
-```bash
-fd
-```
-
-就会自动拉取 Gist 最新版。
-
-### 5. 不建议用管道方式运行交互菜单
-
-不要这样运行交互菜单：
-
-```bash
-curl -fsSL "https://gist.githubusercontent.com/Nyrazzy/019e6d147b7e69fa82fe08f783a52af7/raw/install-caddy.sh" | bash
-```
-
-这种方式可能导致中文菜单输入异常。
-
-推荐使用：
-
-```bash
-bash <(curl -q -fsSL "https://gist.githubusercontent.com/Nyrazzy/019e6d147b7e69fa82fe08f783a52af7/raw/install-caddy.sh?$(date +%s)")
+bash <(curl -q -fsSL "https://raw.githubusercontent.com/Nyrazzy/caddy_helper/refs/heads/main/install-caddy.sh?$(date +%s)")
 ```
